@@ -3,9 +3,57 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import re
+import pickle
+import os
 
 
-# ========================= AUTENTICACIÓN =========================
+# ========================= CARGA DEL MODELO =========================
+@st.cache_resource
+def load_model():
+    """Carga el modelo entrenado de sklearn"""
+    try:
+        # Intentar cargar desde diferentes ubicaciones
+        model_paths = ['modelo.pkl', 'model.pkl', './models/modelo.pkl']
+
+        for path in model_paths:
+            if os.path.exists(path):
+                with open(path, 'rb') as file:
+                    model = pickle.load(file)
+                st.success(f"Modelo cargado desde: {path}")
+                return model
+
+        st.warning("No se encontró archivo del modelo. Usando lógica simplificada.")
+        return None
+
+    except Exception as e:
+        st.error(f"Error cargando modelo: {str(e)}")
+        return None
+
+
+def prepare_features_for_model(df):
+    """Prepara las features para el modelo de sklearn"""
+    # Crear las features que tu modelo espera
+    features = pd.DataFrame()
+
+    # Features básicas que probablemente usa tu modelo
+    features['monto_custodia'] = df['monto_custodia']
+    features['dias_desde_emision'] = df['dias_desde_emision']
+    features['dias_hasta_vencimiento'] = df['dias_hasta_vencimiento']
+    features['merito_ejecutivo'] = df['merito_ejecutivo']
+    features['tasa'] = df['tasa']
+    features['folio'] = df['Folio']
+
+    # Features derivadas que podrían estar en tu modelo
+    features['monto_mm'] = features['monto_custodia'] / 1_000_000
+    features['dias_total'] = features['dias_desde_emision'] + features['dias_hasta_vencimiento']
+    features['tasa_anual'] = features['tasa'] * 12
+
+    # Rellenar NaN con valores por defecto
+    features = features.fillna(0)
+
+    return features
+
+
 def check_login():
     """Sistema de autenticación simple"""
 
@@ -13,7 +61,7 @@ def check_login():
     users = {
         "proveedor1": "pass123",
         "proveedor2": "pass456",
-        "prov_demo": "demo2025",
+        "cliente_demo": "demo2024",
         "factoring_xyz": "fact789",
         "admin": "admin2024"
     }
@@ -44,12 +92,12 @@ def check_login():
         with st.expander("Información de Acceso"):
             st.markdown("""
             **Para obtener acceso:**
-            - Contacta al equipo de deuda privada LV
+            - Contacta al administrador del sistema
             - Se te proporcionará un usuario y contraseña únicos
             - El acceso es solo para evaluación previa de facturas
 
-            **Usuario de prueba disponible:**
-            - prov_demo / demo2025
+            **Usuarios de prueba disponibles:**
+            - cliente_demo / demo2024
             """)
 
         return False
@@ -311,17 +359,51 @@ def VMF_condition_simple(data):
     return VMF
 
 
-# ========================= ÁRBOL DE DECISIÓN SIMPLIFICADO =========================
+# ========================= ÁRBOL DE DECISIÓN CON MODELO =========================
 class SimpleDecisionTree:
-    """Versión simplificada del árbol de decisión para proveedores"""
+    """Versión que puede usar modelo sklearn o lógica simplificada"""
 
-    def __init__(self):
+    def __init__(self, model=None):
         self.blacklist = []  # Por seguridad, vacía para proveedores
         self.whitelist = []  # Por seguridad, vacía para proveedores
+        self.model = model
 
     def classify_invoice(self, row):
-        """Clasifica una sola factura y devuelve A/R/P"""
+        """Clasifica una sola factura usando modelo o lógica simple"""
 
+        # Si tenemos modelo, usarlo
+        if self.model is not None:
+            return self.classify_with_model(row)
+        else:
+            return self.classify_with_logic(row)
+
+    def classify_with_model(self, row):
+        """Clasificación usando modelo sklearn"""
+        try:
+            # Preparar features para el modelo
+            features_df = prepare_features_for_model(pd.DataFrame([row]))
+
+            # Hacer predicción
+            prediction = self.model.predict(features_df)[0]
+
+            # Si tu modelo devuelve probabilidades, usar predict_proba
+            if hasattr(self.model, 'predict_proba'):
+                proba = self.model.predict_proba(features_df)[0]
+                # Convertir probabilidad a A/R/P según tu lógica
+                if prediction == 1:  # Assuming 1 = approved
+                    return 'A' if proba[1] > 0.7 else 'P'
+                else:
+                    return 'R'
+
+            # Si solo devuelve clase
+            return 'A' if prediction == 1 else 'R'
+
+        except Exception as e:
+            st.error(f"Error en predicción del modelo: {str(e)}")
+            return self.classify_with_logic(row)
+
+    def classify_with_logic(self, row):
+        """Clasificación con lógica simplificada (fallback)"""
         # Valores por defecto para variables que no tenemos
         row['VM'] = ""  # Sin historial
         row['Dicom'] = 0  # Sin información DICOM
@@ -338,7 +420,6 @@ class SimpleDecisionTree:
 
         # Lógica de decisión simplificada
         result = self.simple_decision_logic(row, VMF)
-
         return result
 
     def simple_decision_logic(self, data, VMF):
@@ -477,10 +558,13 @@ def main():
 
             st.success(f"{len(processed_df)} facturas válidas procesadas")
 
+            # Cargar modelo de machine learning
+            model = load_model()
+
             # Aplicar modelo
             st.subheader("Evaluando facturas...")
 
-            tree = SimpleDecisionTree()
+            tree = SimpleDecisionTree(model=model)
             results = []
 
             progress_bar = st.progress(0)
