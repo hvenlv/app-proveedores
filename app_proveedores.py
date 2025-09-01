@@ -22,6 +22,9 @@ def check_login():
     """Sistema de autenticación simple"""
     users = {
         "proveedor1": "pass123",
+        "mauricio": "mauricio123",
+        "esteban": "esteban123",
+        "Finz": "Finz123",
         "proveedor2": "pass456",
         "cliente_demo": "demo2024",
         "factoring_xyz": "fact789",
